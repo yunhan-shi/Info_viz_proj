@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Market Analysis</title>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #f3f4f6; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 24px; transition: all 0.3s; }
+        .chart-card { background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); padding: 20px; border: 1px solid #e5e7eb; }
+        
+        /* Tooltip */
+        #global-tooltip {
+            position: absolute; background: rgba(17, 24, 39, 0.95); color: white; padding: 12px;
+            border-radius: 8px; pointer-events: none; font-size: 13px; z-index: 9999;
+            opacity: 0; transition: opacity 0.1s; transform: translate(-50%, -110%);
+            border: 1px solid rgba(255,255,255,0.1); white-space: nowrap; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
+        }
+        
+        /* Treemap Styles */
+        .treemap-cell rect { transition: all 0.2s; }
+        .treemap-cell:hover rect { filter: brightness(1.15); stroke: white; stroke-width: 2px; }
+        .treemap-cell.selected rect { stroke: #2563eb !important; stroke-width: 4px !important; z-index: 10; }
+        
+        /* Form Elements */
+        select {
+            background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+            background-position: right 0.5rem center; background-repeat: no-repeat; background-size: 1.5em 1.5em;
+            padding-right: 2.5rem; -webkit-appearance: none; appearance: none;
+        }
+
+        /* Language Toggle */
+        .lang-btn {
+            background: white; border: 1px solid #d1d5db; padding: 6px 12px; border-radius: 20px;
+            font-size: 13px; font-weight: 600; color: #4b5563; cursor: pointer; transition: all 0.2s;
+            display: flex; items-center; gap: 6px;
+        }
+        .lang-btn:hover { background: #f3f4f6; color: #111827; border-color: #9ca3af; }
+        .lang-btn span.active { color: #2563eb; }
+
+        .legend-item { display: inline-flex; align-items: center; margin-right: 12px; font-size: 12px; color: #4b5563; }
+        .legend-color { width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
+    </style>
+</head>
+
+<body class="text-gray-800">
+
+    <header class="mb-6 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+        <div>
+            <h1 id="page-title" class="text-3xl font-extrabold text-gray-900 tracking-tight">
+                Stock Market Value & Policy Impact
+            </h1>
+            <p id="page-subtitle" class="text-gray-500 mt-1">
+                Size by <strong>Market Value</strong> • Color by <strong>Industry</strong>
+            </p>
+        </div>
+        
+        <!-- Controls -->
+        <div class="flex flex-wrap items-center gap-3 bg-white p-3 rounded-lg shadow-sm border border-gray-200">
+            
+            <!-- Language Toggle -->
+            <button class="lang-btn" onclick="toggleLanguage()">
+                <span id="lang-en" class="active">EN</span> / <span id="lang-zh">中文</span>
+            </button>
+            
+            <div class="w-px h-8 bg-gray-200 mx-1"></div>
+
+            <!-- New Benchmark Dropdown -->
+            <div>
+                <label id="lbl-benchmark" class="block text-xs font-semibold text-blue-600 uppercase tracking-wider mb-1">Active Benchmark</label>
+                <select id="benchmark-select" class="block w-48 bg-blue-50 border border-blue-200 text-blue-900 text-sm rounded-md focus:ring-blue-500 p-2 font-medium">
+                    <!-- Populated via JS -->
+                </select>
+            </div>
+            
+            <div class="w-px h-8 bg-gray-200 mx-1"></div>
+
+            <div>
+                <label id="lbl-province" class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Province</label>
+                <select id="province-select" class="block w-36 bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-md focus:ring-blue-500 p-2">
+                    <!-- Populated via JS -->
+                </select>
+            </div>
+            <div>
+                <label id="lbl-industry" class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Industry</label>
+                <select id="industry-select" class="block w-36 bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-md focus:ring-blue-500 p-2">
+                    <!-- Populated via JS -->
+                </select>
+            </div>
+        </div>
+    </header>
+
+    <div id="loading-indicator" class="bg-blue-50 text-blue-700 p-4 rounded-lg mb-6 flex items-center animate-pulse">
+        Loading Data...
+    </div>
+
+    <div class="flex flex-col xl:flex-row gap-6">
+
+        <!-- Main Visualization Area (Treemap) -->
+        <div id="treemap-container" class="flex-1 chart-card relative h-[650px] flex flex-col">
+            <h2 class="text-lg font-bold text-gray-800 mb-2 flex justify-between items-center">
+                <span class="flex items-center gap-2">
+                    <span class="w-2 h-6 bg-blue-600 rounded-sm"></span>
+                    <span id="treemap-title">Market Map (Treemap)</span>
+                </span>
+                <span id="treemap-subtitle" class="text-xs font-normal text-gray-500">Color indicates Industry</span>
+            </h2>
+            <div id="treemap-viz" class="flex-1 w-full rounded-lg overflow-hidden bg-gray-50 border border-gray-100"></div>
+        </div>
+
+        <!-- Sidebar (Detail Charts) -->
+        <aside class="w-full xl:w-[36rem] flex flex-col gap-6">
+
+            <!-- Bar Chart -->
+            <div id="bar-chart-container" class="chart-card h-[310px] flex flex-col">
+                <h2 id="bar-chart-title" class="text-lg font-bold text-gray-800 mb-2 truncate">Select an Industry</h2>
+                <div id="bar-chart-viz" class="flex-1 w-full"></div>
+            </div>
+
+            <!-- Line Chart -->
+            <div id="line-chart-container" class="chart-card h-[380px] flex flex-col">
+                <div class="flex justify-between items-center mb-2">
+                    <h2 id="line-chart-title" class="text-lg font-bold text-gray-800 truncate">Select a Stock</h2>
+                    <div class="flex items-center cursor-pointer hover:bg-gray-50 p-1 rounded">
+                        <input type="checkbox" id="show-all-benchmarks" class="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer">
+                        <label id="lbl-show-all" for="show-all-benchmarks" class="ml-2 text-sm text-gray-700 font-medium cursor-pointer">Show All Benchmarks</label>
+                    </div>
+                </div>
+                <div id="line-chart-legend" class="flex flex-wrap gap-2 mb-2 min-h-[20px]"></div>
+                <div id="line-chart-viz" class="flex-1 w-full"></div>
+            </div>
+
+        </aside>
+    </div>
+
+    <script>
+        // =========================================================================
+        // 1. CONFIGURATION & TRANSLATIONS
+        // =========================================================================
+
+        const EVENT_DATE = new Date("2024-09-24");
+        
+        const TRANSLATIONS = {
+            en: {
+                pageTitle: "Stock Market Value & Policy Impact",
+                pageSubtitle: "Size by <strong>Market Value</strong> • Color by <strong>Industry</strong>",
+                lblBenchmark: "Active Benchmark",
+                lblProvince: "Province",
+                lblIndustry: "Industry",
+                lblShowAll: "Show All Benchmarks",
+                treemapTitle: "Market Map (Treemap)",
+                treemapSubtitle: "Color indicates Industry",
+                barChartDefault: "Top Stocks by Market Value",
+                barChartIndustry: "Industry",
+                lineChartDefault: "Select a Stock",
+                loading: "Loading Data...",
+                allProv: "All Provinces",
+                allInd: "All Industries",
+                policy: "Policy",
+                tooltipInd: "Ind",
+                tooltipProv: "Prov",
+                tooltipMV: "MV",
+                tooltipAR: "Avg AR",
+                unitYi: "B", // Billion
+                unitWan: "M", // Million
+                benchmarks: {
+                    'abnormal_ret_上证指数': 'Shanghai Index',
+                    'abnormal_ret_深证成指': 'Shenzhen Index',
+                    'abnormal_ret_上证50': 'SSE 50',
+                    'abnormal_ret_沪深300': 'CSI 300',
+                    'abnormal_ret_中证500': 'CSI 500',
+                    'abnormal_ret_中证1000': 'CSI 1000',
+                    'abnormal_ret_中证2000': 'CSI 2000',
+                    'abnormal_ret_中证全指': 'CSI All'
+                }
+            },
+            zh: {
+                pageTitle: "股票市值与政策影响分析",
+                pageSubtitle: "大小表示 <strong>市值</strong> • 颜色表示 <strong>行业</strong>",
+                lblBenchmark: "基准指数",
+                lblProvince: "省份",
+                lblIndustry: "行业",
+                lblShowAll: "显示所有基准",
+                treemapTitle: "市场概览 (树状图)",
+                treemapSubtitle: "颜色区分行业",
+                barChartDefault: "市值排名前列股票",
+                barChartIndustry: "行业",
+                lineChartDefault: "请选择股票查看详情",
+                loading: "数据加载中...",
+                allProv: "所有省份",
+                allInd: "所有行业",
+                policy: "政策发布",
+                tooltipInd: "行业",
+                tooltipProv: "省份",
+                tooltipMV: "市值",
+                tooltipAR: "平均超额收益",
+                unitYi: "亿",
+                unitWan: "万",
+                benchmarks: {
+                    'abnormal_ret_上证指数': '上证指数',
+                    'abnormal_ret_深证成指': '深证成指',
+                    'abnormal_ret_上证50': '上证50',
+                    'abnormal_ret_沪深300': '沪深300',
+                    'abnormal_ret_中证500': '中证500',
+                    'abnormal_ret_中证1000': '中证1000',
+                    'abnormal_ret_中证2000': '中证2000',
+                    'abnormal_ret_中证全指': '中证全指'
+                }
+            }
+        };
+
+        const BENCHMARKS_KEYS = [
+            'abnormal_ret_上证指数', 'abnormal_ret_深证成指', 'abnormal_ret_上证50',
+            'abnormal_ret_沪深300', 'abnormal_ret_中证500', 'abnormal_ret_中证1000',
+            'abnormal_ret_中证2000', 'abnormal_ret_中证全指'
+        ];
+
+        // D3 Colors
+        const INDUSTRY_COLORS = d3.scaleOrdinal(d3.schemeTableau10); 
+        const LINE_COLORS = d3.schemeTableau10;
+
+        const state = {
+            lang: 'en', // 'en' or 'zh'
+            allStocks: [],     
+            filteredStocks: [],
+            metaMap: {},
+            selectedIndustry: null,
+            selectedFirm: null,
+            filters: { province: 'all', industry: 'all' },
+            activeBenchmark: BENCHMARKS_KEYS[0],
+            showAllBenchmarks: false
+        };
+
+        const tooltip = d3.select("body").append("div").attr("id", "global-tooltip");
+        const showTooltip = (html, e) => tooltip.html(html).style("left", e.pageX+"px").style("top", e.pageY+"px").style("opacity", 1);
+        const hideTooltip = () => tooltip.style("opacity", 0);
+
+        // =========================================================================
+        // 2. LANGUAGE LOGIC
+        // =========================================================================
+
+        function toggleLanguage() {
+            state.lang = state.lang === 'en' ? 'zh' : 'en';
+            updateInterfaceLanguage();
+        }
+
+        function updateInterfaceLanguage() {
+            const t = TRANSLATIONS[state.lang];
+            
+            // Toggle Button Visual
+            document.getElementById('lang-en').className = state.lang === 'en' ? 'active' : '';
+            document.getElementById('lang-zh').className = state.lang === 'zh' ? 'active' : '';
+
+            // Static Text
+            document.getElementById('page-title').textContent = t.pageTitle;
+            document.getElementById('page-subtitle').innerHTML = t.pageSubtitle;
+            document.getElementById('lbl-benchmark').textContent = t.lblBenchmark;
+            document.getElementById('lbl-province').textContent = t.lblProvince;
+            document.getElementById('lbl-industry').textContent = t.lblIndustry;
+            document.getElementById('lbl-show-all').textContent = t.lblShowAll;
+            document.getElementById('treemap-title').textContent = t.treemapTitle;
+            document.getElementById('treemap-subtitle').textContent = t.treemapSubtitle;
+
+            // Update Benchmarks Dropdown
+            const benchSelect = document.getElementById('benchmark-select');
+            benchSelect.innerHTML = '';
+            BENCHMARKS_KEYS.forEach(key => {
+                const opt = document.createElement('option');
+                opt.value = key;
+                opt.textContent = t.benchmarks[key];
+                benchSelect.appendChild(opt);
+            });
+            benchSelect.value = state.activeBenchmark;
+
+            // Update Filters Dropdowns
+            // Re-populate to update "All" text
+            populateFilterDropdowns();
+
+            // Re-draw Charts to update internal labels/tooltips
+            updateVisualizations();
+        }
+
+        // =========================================================================
+        // 3. DATA PROCESSING
+        // =========================================================================
+
+        async function loadData() {
+            try {
+                const [stockData, basicInfo] = await Promise.all([
+                    d3.csv("panel_cn_mainboard_and_indices_with_ab_return.csv"),
+                    d3.csv("stock_basic_info_monthly.csv")
+                ]);
+
+                // 1. Process Metadata
+                const metaMap = {};
+                d3.group(basicInfo, d => d.code).forEach((rows, code) => {
+                    rows.sort((a, b) => new Date(b.snapshot_date) - new Date(a.snapshot_date));
+                    const latest = rows[0];
+                    metaMap[code] = {
+                        industry: latest.industry || "Unclassified",
+                        province: latest.province || "Unknown",
+                        total_mv: parseFloat(latest.total_mv) || 0,
+                        name: latest.name
+                    };
+                });
+                state.metaMap = metaMap;
+
+                // 2. Process Time Series
+                const firms = {};
+                const parseDate = d3.timeParse("%Y-%m-%d");
+
+                stockData.forEach(d => {
+                    const code = d.code;
+                    if (!code) return;
+                    if (!firms[code]) {
+                        const meta = metaMap[code] || { industry: "Unclassified", province: "Unknown", total_mv: 1000, name: d.name || code };
+                        firms[code] = {
+                            code: code, name: meta.name, industry: meta.industry, province: meta.province, 
+                            marketValue: meta.total_mv,
+                            dailyData: [] 
+                        };
+                    }
+                    const date = parseDate(d.trade_date);
+                    if (date) {
+                        const dayRecord = { date: date };
+                        BENCHMARKS_KEYS.forEach(k => {
+                            dayRecord[k] = parseFloat(d[k]) || 0;
+                        });
+                        firms[code].dailyData.push(dayRecord);
+                    }
+                });
+
+                state.allStocks = Object.values(firms);
+                recalculateAggregates();
+                state.filteredStocks = state.allStocks; 
+                
+                // Init UI
+                document.getElementById('benchmark-select').addEventListener('change', (e) => {
+                    state.activeBenchmark = e.target.value;
+                    recalculateAggregates();
+                    updateVisualizations();
+                });
+                
+                document.getElementById('province-select').addEventListener('change', (e) => { state.filters.province = e.target.value; applyFilters(); });
+                document.getElementById('industry-select').addEventListener('change', (e) => { state.filters.industry = e.target.value; applyFilters(); });
+                document.getElementById('show-all-benchmarks').addEventListener('change', (e) => { state.showAllBenchmarks = e.target.checked; drawLineChart(); });
+
+                document.getElementById('loading-indicator').style.display = 'none';
+                
+                // Set initial language and render
+                updateInterfaceLanguage(); 
+
+            } catch (error) {
+                console.error(error);
+                alert("Error loading data. Check console.");
+            }
+        }
+
+        function populateFilterDropdowns() {
+            const t = TRANSLATIONS[state.lang];
+            const provinces = Array.from(new Set(state.allStocks.map(d => d.province))).sort();
+            const industries = Array.from(new Set(state.allStocks.map(d => d.industry))).sort();
+
+            const pSel = document.getElementById('province-select');
+            pSel.innerHTML = '';
+            pSel.add(new Option(t.allProv, 'all'));
+            provinces.forEach(p => pSel.add(new Option(p, p)));
+            pSel.value = state.filters.province;
+
+            const iSel = document.getElementById('industry-select');
+            iSel.innerHTML = '';
+            iSel.add(new Option(t.allInd, 'all'));
+            industries.forEach(i => iSel.add(new Option(i, i)));
+            iSel.value = state.filters.industry;
+        }
+
+        function recalculateAggregates() {
+            const key = state.activeBenchmark;
+            state.allStocks.forEach(firm => {
+                firm.dailyData.sort((a,b) => a.date - b.date);
+                let sumAr = 0, car = 0, count = 0;
+                firm.timeseries = firm.dailyData.map(d => {
+                    const val = d[key];
+                    sumAr += val;
+                    car += val;
+                    count++;
+                    return { date: d.date, ar: val, car: car };
+                });
+                firm.avgAr = count > 0 ? sumAr / count : 0;
+            });
+        }
+
+        function applyFilters() {
+            state.filteredStocks = state.allStocks.filter(d => {
+                return (state.filters.province === 'all' || d.province === state.filters.province) &&
+                       (state.filters.industry === 'all' || d.industry === state.filters.industry);
+            });
+            if (state.selectedFirm && !state.filteredStocks.includes(state.selectedFirm)) state.selectedFirm = null;
+            state.selectedIndustry = null;
+            updateVisualizations();
+        }
+
+        function updateVisualizations() {
+            drawTreemap();
+            drawBarChart();
+            drawLineChart();
+        }
+
+        // =========================================================================
+        // 4. VISUALIZATIONS
+        // =========================================================================
+
+        function drawTreemap() {
+            const t = TRANSLATIONS[state.lang];
+            const container = document.getElementById('treemap-container');
+            const target = document.getElementById('treemap-viz');
+            target.innerHTML = ''; 
+
+            if (!state.filteredStocks.length) { 
+                target.innerHTML = `<div class="p-10 text-center text-gray-400">${t.noData}</div>`; 
+                return; 
+            }
+
+            const width = container.offsetWidth - 42;
+            const height = container.offsetHeight - 80;
+
+            const groups = d3.group(state.filteredStocks, d => d.industry);
+            const root = d3.hierarchy({ children: Array.from(groups, ([k, v]) => ({ name: k, children: v })) })
+                .sum(d => d.marketValue)
+                .sort((a, b) => b.value - a.value);
+
+            d3.treemap().size([width, height]).paddingOuter(4).paddingTop(20).paddingInner(1)(root);
+
+            const svg = d3.select(target).append("svg").attr("width", width).attr("height", height);
+
+            // Groups (Industries)
+            svg.selectAll(".label").data(root.children).join("text")
+                .attr("x", d => d.x0 + 4).attr("y", d => d.y0 + 14)
+                .text(d => d.data.name).attr("font-size", "11px").attr("font-weight", "bold").attr("fill", "#4b5563");
+
+            // Cells
+            const cell = svg.selectAll("g").data(root.leaves()).join("g").attr("transform", d => `translate(${d.x0},${d.y0})`);
+            
+            cell.append("rect")
+                .attr("class", d => `treemap-cell cursor-pointer ${state.selectedIndustry === d.parent.data.name ? 'selected' : ''}`)
+                .attr("width", d => Math.max(0, d.x1 - d.x0)).attr("height", d => Math.max(0, d.y1 - d.y0))
+                .attr("fill", d => INDUSTRY_COLORS(d.parent.data.name)) // COLOR BY INDUSTRY
+                .attr("stroke", "#fff")
+                .on("mouseover", (e, d) => {
+                    // Dynamic Tooltip Translation
+                    const mvVal = d.data.marketValue > 1e8 ? (d.data.marketValue/1e8).toFixed(2) + t.unitYi : (d.data.marketValue/1e4).toFixed(0) + t.unitWan;
+                    showTooltip(`
+                        <div class="font-bold border-b border-gray-600 pb-1 mb-1">${d.data.name}</div>
+                        <div>${t.tooltipInd}: <span style="color:${INDUSTRY_COLORS(d.parent.data.name)}">${d.parent.data.name}</span></div>
+                        <div>${t.tooltipProv}: ${d.data.province}</div>
+                        <div class="mt-1">${t.tooltipMV}: <span class="text-yellow-400 font-mono">${mvVal}</span></div>
+                        <div>${t.tooltipAR}: <span class="${d.data.avgAr>=0?'text-green-400':'text-red-400'} font-bold">${d3.format("+.2%")(d.data.avgAr)}</span></div>
+                    `, e);
+                })
+                .on("mouseout", hideTooltip)
+                .on("click", (e, d) => {
+                    state.selectedIndustry = d.parent.data.name;
+                    state.selectedFirm = d.data;
+                    updateVisualizations();
+                });
+
+            cell.append("text").attr("x", 4).attr("y", 14).text(d => d.data.name)
+                .attr("font-size", "10px").attr("fill", "white").style("pointer-events", "none")
+                .style("text-shadow", "0 1px 2px rgba(0,0,0,0.5)")
+                .style("display", d => (d.x1 - d.x0) > 35 && (d.y1 - d.y0) > 20 ? "block" : "none");
+        }
+
+        function drawBarChart() {
+            const t = TRANSLATIONS[state.lang];
+            const target = document.getElementById('bar-chart-viz');
+            target.innerHTML = '';
+            
+            let data = [];
+            const titleEl = document.getElementById('bar-chart-title');
+            
+            if (state.selectedIndustry) {
+                titleEl.innerHTML = `${t.barChartIndustry}: <span class="text-blue-600">${state.selectedIndustry}</span>`;
+                data = state.filteredStocks.filter(d => d.industry === state.selectedIndustry);
+            } else {
+                titleEl.textContent = t.barChartDefault;
+                data = [...state.filteredStocks].sort((a,b) => b.marketValue - a.marketValue).slice(0, 15);
+            }
+
+            if(!data.length) return;
+
+            const margin = { top: 10, right: 10, bottom: 60, left: 50 };
+            const width = target.offsetWidth;
+            const height = target.offsetHeight;
+            const chartW = width - margin.left - margin.right;
+            const chartH = height - margin.top - margin.bottom;
+
+            const svg = d3.select(target).append("svg").attr("width", width).attr("height", height)
+                .append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+            const x = d3.scaleBand().range([0, chartW]).domain(data.map(d => d.name)).padding(0.3);
+            const maxVal = d3.max(data, d => Math.abs(d.avgAr)) || 0.01;
+            const y = d3.scaleLinear().domain([-maxVal, maxVal]).range([chartH, 0]);
+
+            svg.append("g").attr("transform", `translate(0,${chartH})`).call(d3.axisBottom(x)).selectAll("text")
+                .attr("transform", "translate(-10,10)rotate(-30)").style("text-anchor", "end").style("font-size", "10px");
+            svg.append("g").call(d3.axisLeft(y).tickFormat(d3.format("+.1%")).ticks(5));
+
+            // Bar colors remain Red/Green to denote performance, 
+            // as this is a Returns chart, not a categorical chart like the treemap.
+            svg.selectAll("rect").data(data).join("rect")
+                .attr("x", d => x(d.name)).attr("width", x.bandwidth())
+                .attr("y", d => d.avgAr > 0 ? y(d.avgAr) : y(0)).attr("height", d => Math.abs(y(d.avgAr) - y(0)))
+                .attr("fill", d => d.avgAr > 0 ? "#10b981" : "#ef4444")
+                .attr("class", d => `cursor-pointer hover:opacity-80 ${state.selectedFirm === d ? 'stroke-2 stroke-blue-800' : ''}`)
+                .on("click", (e, d) => { state.selectedFirm = d; updateVisualizations(); });
+            
+            svg.append("line").attr("x1", 0).attr("x2", chartW).attr("y1", y(0)).attr("y2", y(0)).attr("stroke", "#9ca3af");
+        }
+
+        function drawLineChart() {
+            const t = TRANSLATIONS[state.lang];
+            const target = document.getElementById('line-chart-viz');
+            const legendContainer = document.getElementById('line-chart-legend');
+            target.innerHTML = ''; legendContainer.innerHTML = '';
+
+            if (!state.selectedFirm) {
+                document.getElementById('line-chart-title').textContent = t.lineChartDefault;
+                return;
+            }
+
+            const firm = state.selectedFirm;
+            document.getElementById('line-chart-title').textContent = `${firm.name} (${firm.code})`;
+
+            const linesToDraw = [];
+            if (state.showAllBenchmarks) {
+                BENCHMARKS_KEYS.forEach((key, i) => {
+                    let car = 0;
+                    const points = firm.dailyData.map(d => { car += d[key]; return { date: d.date, value: car }; });
+                    linesToDraw.push({ key: key, label: t.benchmarks[key], data: points, color: LINE_COLORS[i % 10], width: 1.5 });
+                });
+            } else {
+                const activeKey = state.activeBenchmark;
+                linesToDraw.push({ key: activeKey, label: t.benchmarks[activeKey], data: firm.timeseries.map(d => ({date: d.date, value: d.car})), color: "#2563eb", width: 2.5 });
+            }
+
+            // Legend
+            linesToDraw.forEach(line => {
+                const item = document.createElement('div');
+                item.className = "legend-item";
+                item.innerHTML = `<div class="legend-color" style="background:${line.color}"></div>${line.label}`;
+                legendContainer.appendChild(item);
+            });
+
+            const margin = { top: 10, right: 30, bottom: 30, left: 50 };
+            const width = target.offsetWidth;
+            const height = target.offsetHeight;
+            const chartW = width - margin.left - margin.right;
+            const chartH = height - margin.top - margin.bottom;
+
+            const svg = d3.select(target).append("svg").attr("width", width).attr("height", height)
+                .append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+            const allPoints = linesToDraw.flatMap(l => l.data);
+            const x = d3.scaleTime().domain(d3.extent(allPoints, d => d.date)).range([0, chartW]);
+            const yMax = d3.max(allPoints, d => Math.abs(d.value)) || 0.05;
+            const y = d3.scaleLinear().domain([-yMax*1.1, yMax*1.1]).range([chartH, 0]);
+
+            svg.append("g").attr("transform", `translate(0,${chartH})`).call(d3.axisBottom(x).ticks(5));
+            svg.append("g").call(d3.axisLeft(y).tickFormat(d3.format("+.1%")).ticks(5));
+
+            linesToDraw.forEach(line => {
+                svg.append("path").datum(line.data).attr("fill", "none")
+                    .attr("stroke", line.color).attr("stroke-width", line.width)
+                    .attr("d", d3.line().x(d => x(d.date)).y(d => y(d.value))).style("opacity", 0.9);
+            });
+
+            svg.append("line").attr("x1", 0).attr("x2", chartW).attr("y1", y(0)).attr("y2", y(0)).attr("stroke", "#9ca3af").attr("stroke-dasharray", "4");
+
+            if (EVENT_DATE >= x.domain()[0] && EVENT_DATE <= x.domain()[1]) {
+                const ex = x(EVENT_DATE);
+                svg.append("line").attr("x1", ex).attr("x2", ex).attr("y1", 0).attr("y2", chartH)
+                    .attr("stroke", "#f97316").attr("stroke-dasharray", "4").attr("stroke-width", 2);
+                svg.append("text").attr("x", ex+5).attr("y", 15).text(t.policy).attr("fill", "#f97316").style("font-size", "10px");
+            }
+        }
+
+        document.addEventListener("DOMContentLoaded", loadData);
+        window.addEventListener('resize', () => { if(state.allStocks.length) updateVisualizations(); });
+
+    </script>
+</body>
+</html>
