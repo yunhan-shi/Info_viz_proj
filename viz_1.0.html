@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Buyback Impact Visualization</title>
+    <!-- Load D3.js -->
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Base Styles */
+        body { 
+            background-color: #f8fafc; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            padding: 24px; 
+            padding-bottom: 120px; 
+            color: #1e293b; 
+        }
+        
+        /* Card Component */
+        .chart-card {
+            background-color: #ffffff; 
+            border-radius: 12px; 
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03); 
+            padding: 20px; 
+            border: 1px solid #e2e8f0;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .chart-card:hover { 
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); 
+        }
+
+        /* Treemap Interaction */
+        .treemap-cell rect { 
+            transition: all 0.2s ease; 
+            stroke: #fff; 
+            stroke-width: 1px; 
+        }
+        .treemap-cell:hover rect { 
+            filter: brightness(1.1); 
+            stroke-width: 2px; 
+            z-index: 10; 
+        }
+        .treemap-cell.selected rect { 
+            stroke: #2563eb !important; 
+            stroke-width: 4px !important; 
+            z-index: 20; 
+        }
+        .treemap-cell text { 
+            pointer-events: none; 
+            text-shadow: 0 1px 2px rgba(0,0,0,0.3); 
+        }
+
+        /* Custom Tooltip */
+        #global-tooltip {
+            position: absolute; 
+            background: rgba(15, 23, 42, 0.95); 
+            color: white; 
+            padding: 12px 16px;
+            border-radius: 8px; 
+            pointer-events: none; 
+            font-size: 13px; 
+            z-index: 9999;
+            opacity: 0; 
+            transition: opacity 0.15s; 
+            transform: translate(-50%, -110%);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3); 
+            border: 1px solid rgba(255,255,255,0.1);
+            line-height: 1.5;
+        }
+
+        /* Bottom Info Bar */
+        #stock-info-bar {
+            position: fixed; 
+            bottom: 0; 
+            left: 0; 
+            width: 100%;
+            background: rgba(255, 255, 255, 0.95); 
+            backdrop-filter: blur(8px);
+            border-top: 1px solid #cbd5e1; 
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.05);
+            z-index: 50; 
+            transform: translateY(100%); 
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        #stock-info-bar.visible { 
+            transform: translateY(0); 
+        }
+
+        /* Form Elements */
+        select {
+            background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%2364748b' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+            background-position: right 0.5rem center; 
+            background-repeat: no-repeat; 
+            background-size: 1.5em 1.5em;
+            padding-right: 2.5rem; 
+            -webkit-appearance: none; 
+            appearance: none;
+        }
+        .btn-outline { 
+            background-color: white; 
+            border: 1px solid #cbd5e1; 
+            color: #475569; 
+            padding: 6px 12px; 
+            border-radius: 6px; 
+            font-weight: 500; 
+            font-size: 0.875rem; 
+            transition: all 0.2s; 
+            cursor: pointer;
+        }
+        .btn-outline:hover { 
+            background-color: #f1f5f9; 
+            border-color: #94a3b8; 
+            color: #1e293b; 
+        }
+        .lang-btn span.active { 
+            color: #2563eb; 
+            font-weight: 700; 
+        }
+        
+        /* Chart Visualization Elements */
+        .window-shade-5 { fill: #dbeafe; opacity: 0.5; } /* +/- 5 days */
+        .window-shade-10 { fill: #f1f5f9; opacity: 0.5; } /* +/- 10 days */
+    </style>
+</head>
+
+<body class="text-gray-800">
+
+    <!-- Header Section -->
+    <header class="mb-6 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+        <div>
+            <h1 id="page-title" class="text-3xl font-extrabold text-slate-900 tracking-tight">Stock Buyback Impact Visualization</h1>
+            <p id="page-subtitle" class="text-slate-500 mt-1">Analyzing Abnormal Returns around Policy & Buyback Events</p>
+        </div>
+        
+        <!-- Controls Toolbar -->
+        <div class="flex flex-wrap items-center gap-3 bg-white p-3 rounded-xl shadow-sm border border-slate-200">
+            <!-- Language Toggle -->
+            <button class="btn-outline flex items-center gap-2 lang-btn" onclick="toggleLanguage()">
+                <span id="lang-en" class="active">EN</span><span class="text-slate-300">|</span><span id="lang-zh">中文</span>
+            </button>
+            <div class="w-px h-6 bg-slate-200 mx-1"></div>
+            
+            <!-- Benchmark Selector -->
+            <div class="flex flex-col">
+                <label id="lbl-benchmark" class="text-[10px] font-bold text-blue-600 uppercase tracking-wider mb-0.5">Benchmark</label>
+                <select id="benchmark-select" class="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-md focus:ring-blue-500 p-1.5 w-40"></select>
+            </div>
+            
+            <div class="w-px h-6 bg-slate-200 mx-1"></div>
+
+            <!-- Filters -->
+            <div class="flex flex-col">
+                <label id="lbl-province" class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-0.5">Province</label>
+                <select id="province-select" class="bg-white border border-slate-300 text-slate-700 text-sm rounded-md focus:ring-blue-500 p-1.5 w-32"></select>
+            </div>
+            <div class="flex flex-col">
+                <label id="lbl-industry" class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-0.5">Industry</label>
+                <select id="industry-select" class="bg-white border border-slate-300 text-slate-700 text-sm rounded-md focus:ring-blue-500 p-1.5 w-32"></select>
+            </div>
+            
+            <button id="btn-reset" class="btn-outline text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200 mt-4 ml-2" onclick="resetFilters()">
+                Reset
+            </button>
+        </div>
+    </header>
+
+    <!-- Loading Indicator -->
+    <div id="loading-indicator" class="bg-blue-50 text-blue-700 p-4 rounded-lg mb-6 flex flex-col gap-1 border border-blue-100 shadow-sm">
+        <div class="flex items-center gap-2">
+            <svg class="animate-spin h-5 w-5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span class="font-bold">Loading Data...</span>
+        </div>
+        <div class="text-xs text-blue-600 ml-7">
+            Reading: panel_cn_mainboard..., stock_basic_info..., buyback_events.csv
+        </div>
+    </div>
+
+    <!-- Main Dashboard Grid -->
+    <div class="flex flex-col xl:flex-row gap-6">
+        
+        <!-- Left Column: Treemap -->
+        <div id="treemap-container" class="flex-1 chart-card relative h-[700px] flex flex-col">
+            <div class="flex justify-between items-start mb-4">
+                <div>
+                    <h2 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                        <span class="w-1.5 h-5 bg-blue-600 rounded-full"></span>
+                        <span id="treemap-title">Market Map</span>
+                    </h2>
+                    <p id="treemap-subtitle" class="text-xs text-slate-500 mt-1">Size: Market Value | Color: Industry</p>
+                </div>
+            </div>
+            <div id="treemap-viz" class="flex-1 w-full rounded-lg overflow-hidden bg-slate-50 border border-slate-100 relative"></div>
+            <!-- Interaction Hint Overlay -->
+            <div id="treemap-hint" class="absolute bottom-4 right-4 bg-white/90 backdrop-blur px-3 py-1.5 rounded-full text-xs font-medium text-slate-500 shadow-sm pointer-events-none border border-slate-200">
+                👆 Click block to focus Industry
+            </div>
+        </div>
+
+        <!-- Right Column: Detail Panels -->
+        <aside class="w-full xl:w-[38rem] flex flex-col gap-6">
+            
+            <!-- Top Right: Bar Chart -->
+            <div id="bar-chart-container" class="chart-card h-[340px] flex flex-col">
+                <h2 id="bar-chart-title" class="text-lg font-bold text-slate-800 mb-1 truncate">Event Impact by Firm</h2>
+                <p class="text-xs text-slate-500 mb-3">Avg Abnormal Return during Event Window (±10 days)</p>
+                <div id="bar-chart-viz" class="flex-1 w-full"></div>
+            </div>
+
+            <!-- Bottom Right: Line Chart (Event Window) -->
+            <div id="line-chart-container" class="chart-card h-[400px] flex flex-col">
+                <div class="flex justify-between items-center mb-2">
+                    <div>
+                        <h2 id="line-chart-title" class="text-lg font-bold text-slate-800 truncate">Event Window Analysis</h2>
+                        <p id="line-chart-subtitle" class="text-xs text-slate-500">Cumulative Abnormal Returns (CAR)</p>
+                    </div>
+                    <div class="flex items-center bg-slate-50 px-2 py-1 rounded border border-slate-200">
+                        <input type="checkbox" id="show-all-benchmarks" class="w-3.5 h-3.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer">
+                        <label id="lbl-show-all" for="show-all-benchmarks" class="ml-2 text-xs text-slate-600 font-medium cursor-pointer">Compare All Benchmarks</label>
+                    </div>
+                </div>
+                <div id="line-chart-legend" class="flex flex-wrap gap-2 mb-2 min-h-[20px]"></div>
+                <div id="line-chart-viz" class="flex-1 w-full relative"></div>
+            </div>
+
+        </aside>
+    </div>
+
+    <!-- Stock Info Bottom Bar -->
+    <div id="stock-info-bar">
+        <div class="max-w-[90rem] mx-auto p-4 flex flex-col md:flex-row justify-between items-center gap-6">
+            <!-- Stock Identifier -->
+            <div class="flex items-center gap-4 min-w-[200px]">
+                <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-blue-200">
+                    <span id="info-icon">S</span>
+                </div>
+                <div>
+                    <h3 id="info-name" class="text-lg font-bold text-slate-900 leading-tight">Stock Name</h3>
+                    <div class="flex items-center gap-2">
+                        <span id="info-code" class="text-xs font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-600">000000.SZ</span>
+                        <span id="info-event-tag" class="hidden text-[10px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200">BUYBACK EVENT</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Metadata Stats -->
+            <div class="flex flex-wrap justify-center gap-x-8 gap-y-3 text-sm border-l border-r border-slate-200 px-8">
+                <div>
+                    <span id="lbl-info-ind" class="text-slate-400 block text-[10px] uppercase tracking-wider font-semibold">Industry</span>
+                    <span id="info-ind" class="font-medium text-slate-700">-</span>
+                </div>
+                <div>
+                    <span id="lbl-info-loc" class="text-slate-400 block text-[10px] uppercase tracking-wider font-semibold">Location</span>
+                    <span id="info-loc" class="font-medium text-slate-700">-</span>
+                </div>
+                <div>
+                    <span id="lbl-info-mv" class="text-slate-400 block text-[10px] uppercase tracking-wider font-semibold">Market Cap</span>
+                    <span id="info-mv" class="font-medium text-slate-700">-</span>
+                </div>
+                <div>
+                    <span id="lbl-info-date" class="text-slate-400 block text-[10px] uppercase tracking-wider font-semibold">Data Date</span>
+                    <span id="info-date" class="font-medium text-blue-600">-</span>
+                </div>
+            </div>
+            
+            <!-- External Link -->
+            <div class="min-w-[150px] text-right">
+                 <a id="info-web" href="#" target="_blank" class="text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline transition-colors flex items-center justify-end gap-1">
+                    Visit Website &rarr;
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // =========================================================================
+        // 1. CONFIGURATION
+        // =========================================================================
+        const POLICY_DATE = new Date("2024-09-24");
+        
+        // Dictionary for Multilingual Support
+        const TRANSLATIONS = {
+            en: {
+                pageTitle: "Stock Buyback Impact Visualization",
+                pageSubtitle: "Analyzing Abnormal Returns around Policy & Buyback Events",
+                lblBenchmark: "Benchmark", lblProvince: "Province", lblIndustry: "Industry",
+                lblShowAll: "All Benchmarks", lblReset: "Reset Filters",
+                treemapTitle: "Market Map", treemapSubtitle: "Size: Market Cap | Color: Industry", treemapHint: "Click to filter Industry",
+                barChartDefault: "Top Stocks (Impact)", barChartIndustry: "Industry Analysis",
+                lineChartDefault: "Select a Stock",
+                allProv: "All Provinces", allInd: "All Industries", 
+                policy: "Policy Intro", buyback: "Buyback",
+                tooltipInd: "Ind", tooltipProv: "Prov", tooltipMV: "MV", tooltipAR: "Event Window AR",
+                unitYi: "B", unitWan: "M",
+                lblInfoInd: "Industry", lblInfoLoc: "Location", lblInfoMV: "Market Cap",
+                lblInfoDate: "Snapshot", lblInfoEmp: "Employees", lblInfoWeb: "Website",
+                benchmarks: {
+                    'abnormal_ret_上证指数': 'Shanghai Index', 'abnormal_ret_深证成指': 'Shenzhen Index', 'abnormal_ret_上证50': 'SSE 50', 'abnormal_ret_沪深300': 'CSI 300', 'abnormal_ret_中证500': 'CSI 500', 'abnormal_ret_中证1000': 'CSI 1000', 'abnormal_ret_中证2000': 'CSI 2000', 'abnormal_ret_中证全指': 'CSI All'
+                }
+            },
+            zh: {
+                pageTitle: "股票回购与政策影响可视化",
+                pageSubtitle: "基于事件研究法的超额收益分析",
+                lblBenchmark: "基准指数", lblProvince: "省份", lblIndustry: "行业",
+                lblShowAll: "对比所有基准", lblReset: "重置筛选",
+                treemapTitle: "市场概览", treemapSubtitle: "大小：市值 | 颜色：行业", treemapHint: "点击聚焦行业",
+                barChartDefault: "个股事件影响排名", barChartIndustry: "行业个股分析",
+                lineChartDefault: "请选择股票",
+                allProv: "所有省份", allInd: "所有行业", 
+                policy: "政策发布日", buyback: "回购公告日",
+                tooltipInd: "行业", tooltipProv: "省份", tooltipMV: "市值", tooltipAR: "窗口期超额收益",
+                unitYi: "亿", unitWan: "万",
+                lblInfoInd: "所属行业", lblInfoLoc: "注册地", lblInfoMV: "总市值",
+                lblInfoDate: "数据日期", lblInfoEmp: "员工人数", lblInfoWeb: "官网",
+                benchmarks: {
+                    'abnormal_ret_上证指数': '上证指数', 'abnormal_ret_深证成指': '深证成指', 'abnormal_ret_上证50': '上证50', 'abnormal_ret_沪深300': '沪深300', 'abnormal_ret_中证500': '中证500', 'abnormal_ret_中证1000': '中证1000', 'abnormal_ret_中证2000': '中证2000', 'abnormal_ret_中证全指': '中证全指'
+                }
+            }
+        };
+
+        const BENCHMARKS_KEYS = Object.keys(TRANSLATIONS.en.benchmarks);
+        const INDUSTRY_COLORS = d3.scaleOrdinal(d3.schemeTableau10); 
+        const LINE_COLORS = d3.schemeTableau10;
+
+        const state = {
+            lang: 'en',
+            allStocks: [], filteredStocks: [], metaMap: {}, buybackMap: {},
+            selectedIndustry: null, selectedFirm: null,
+            filters: { province: 'all', industry: 'all' },
+            activeBenchmark: BENCHMARKS_KEYS[0], showAllBenchmarks: false
+        };
+
+        const tooltip = d3.select("body").append("div").attr("id", "global-tooltip");
+        const showTooltip = (html, e) => tooltip.html(html).style("left", e.pageX+"px").style("top", e.pageY+"px").style("opacity", 1);
+        const hideTooltip = () => tooltip.style("opacity", 0);
+
+        // =========================================================================
+        // 2. DATA LOADING & PROCESSING
+        // =========================================================================
+
+        async function loadData() {
+            try {
+                // Ensure files exist locally with these names
+                const [stockData, basicInfo, buybackData] = await Promise.all([
+                    d3.csv("panel_cn_mainboard_and_indices_with_ab_return.csv"),
+                    d3.csv("stock_basic_info_monthly.csv"),
+                    d3.csv("buyback_events.csv")
+                ]);
+
+                processData(stockData, basicInfo, buybackData);
+                document.getElementById('loading-indicator').style.display = 'none';
+
+            } catch (error) {
+                console.error(error);
+                document.getElementById('loading-indicator').innerHTML = 
+                    `<div class="text-red-600 font-bold">Error loading files: ${error.message}</div>
+                     <div class="text-xs text-red-500 mt-1">Please ensure 'panel_cn_mainboard_and_indices_with_ab_return.csv', 'stock_basic_info_monthly.csv', and 'buyback_events.csv' are present.</div>`;
+            }
+        }
+
+        function processData(stockData, basicInfo, buybackData) {
+             // A. Build Buyback Date Map { stockCode: DateObject }
+             const bbMap = {};
+             const parseDate = d3.timeParse("%Y-%m-%d");
+             
+             // The buyback_events.csv should have columns: code, buyback_date
+             buybackData.forEach(d => {
+                 if(d.code && d.buyback_date) {
+                     const dt = parseDate(d.buyback_date.trim());
+                     if(dt) bbMap[d.code.trim()] = dt;
+                 }
+             });
+             state.buybackMap = bbMap;
+
+             // B. Process Metadata (Industry, Location, MV)
+             const metaMap = {};
+             d3.group(basicInfo, d => d.code).forEach((rows, code) => {
+                rows.sort((a, b) => new Date(b.snapshot_date) - new Date(a.snapshot_date));
+                const latest = rows[0];
+                metaMap[code] = {
+                    industry: latest.industry || "Unclassified",
+                    province: latest.province || "Unknown",
+                    city: latest.city || "",
+                    total_mv: parseFloat(latest.total_mv) || 0,
+                    name: latest.name,
+                    snapshot_date: latest.snapshot_date,
+                    website: latest.website
+                };
+            });
+            state.metaMap = metaMap;
+
+            // C. Process Time Series Data (Main Loop)
+            const firms = {};
+            stockData.forEach(d => {
+                const code = d.code;
+                if (!code) return;
+                
+                if (!firms[code]) {
+                    const meta = metaMap[code] || { industry: "Unclassified", province: "Unknown", total_mv: 1000, name: d.name || code };
+                    
+                    // --- EVENT DATE LOGIC ---
+                    // If stock is in buyback list, use that date. Otherwise, default to Policy Date.
+                    const buybackDate = bbMap[code] || null;
+                    const hasBuyback = !!buybackDate;
+
+                    firms[code] = {
+                        code: code, name: meta.name, industry: meta.industry, province: meta.province, 
+                        city: meta.city,
+                        marketValue: meta.total_mv,
+                        snapshot_date: meta.snapshot_date,
+                        employees: meta.employees,
+                        website: meta.website,
+                        
+                        hasBuyback: hasBuyback,
+                        eventDate: hasBuyback ? buybackDate : POLICY_DATE, 
+                        
+                        dailyData: [] 
+                    };
+                }
+                
+                const date = parseDate(d.trade_date);
+                if (date) {
+                    const dayRecord = { date: date };
+                    BENCHMARKS_KEYS.forEach(k => { dayRecord[k] = parseFloat(d[k]) || 0; });
+                    firms[code].dailyData.push(dayRecord);
+                }
+            });
+
+            state.allStocks = Object.values(firms);
+            recalculateAggregates();
+            state.filteredStocks = state.allStocks; 
+            
+            initUI();
+            updateVisualizations(); 
+        }
+
+        // Recalculates metrics when the Benchmark selection changes
+        function recalculateAggregates() {
+            const key = state.activeBenchmark;
+            
+            state.allStocks.forEach(firm => {
+                firm.dailyData.sort((a,b) => a.date - b.date);
+                
+                // 1. Calculate Full Time Series Cumulative Abnormal Return (CAR)
+                let car = 0;
+                firm.timeseries = firm.dailyData.map(d => {
+                    const val = d[key];
+                    car += val;
+                    return { date: d.date, ar: val, car: car };
+                });
+
+                // 2. Calculate Event Window Stats ([-10, +10] days around EventDate)
+                const eventTime = firm.eventDate.getTime();
+                const eventIndex = firm.timeseries.findIndex(d => d.date.getTime() >= eventTime);
+                
+                let windowArSum = 0;
+                let windowCount = 0;
+                
+                if (eventIndex !== -1) {
+                    const start = Math.max(0, eventIndex - 10);
+                    const end = Math.min(firm.timeseries.length - 1, eventIndex + 10);
+                    
+                    for(let i=start; i<=end; i++) {
+                        windowArSum += firm.timeseries[i].ar;
+                        windowCount++;
+                    }
+                }
+                
+                // Metric used for the Bar Chart sorting
+                firm.eventWindowAvgAr = windowCount > 0 ? windowArSum / windowCount : 0;
+            });
+        }
+
+        // =========================================================================
+        // 3. VISUALIZATION LOGIC
+        // =========================================================================
+
+        function updateVisualizations() {
+            drawTreemap();
+            drawBarChart();
+            drawLineChart();
+        }
+
+        function drawTreemap() {
+            const container = document.getElementById('treemap-container');
+            const target = document.getElementById('treemap-viz');
+            target.innerHTML = ''; 
+
+            if (!state.filteredStocks.length) return;
+
+            const width = container.clientWidth;
+            const height = 650; // Fixed height for consistency
+
+            // Create Hierarchy: Root -> Industry -> Firm
+            const root = d3.hierarchy({ 
+                children: Array.from(d3.group(state.filteredStocks, d => d.industry), ([k, v]) => ({ name: k, children: v })) 
+            })
+            .sum(d => d.marketValue)
+            .sort((a, b) => b.value - a.value);
+
+            d3.treemap().size([width, height]).paddingOuter(4).paddingTop(20).paddingInner(1)(root);
+
+            const svg = d3.select(target).append("svg").attr("width", width).attr("height", height);
+
+            // Industry Labels
+            svg.selectAll(".label").data(root.children).join("text")
+                .attr("x", d => d.x0 + 4).attr("y", d => d.y0 + 14)
+                .text(d => d.data.name).attr("font-size", "11px").attr("font-weight", "bold").attr("fill", "#4b5563")
+                .style("display", d => (d.x1 - d.x0) > 40 ? "block" : "none");
+
+            // Firm Rectangles
+            const cell = svg.selectAll("g").data(root.leaves()).join("g").attr("transform", d => `translate(${d.x0},${d.y0})`);
+            
+            cell.append("rect")
+                .attr("class", d => `treemap-cell cursor-pointer ${state.selectedIndustry === d.parent.data.name ? 'selected' : ''}`)
+                .attr("width", d => Math.max(0, d.x1 - d.x0)).attr("height", d => Math.max(0, d.y1 - d.y0))
+                .attr("fill", d => INDUSTRY_COLORS(d.parent.data.name))
+                .on("click", (e, d) => {
+                    // *** 1. SIMULTANEOUS UPDATE LOGIC ***
+                    const ind = d.parent.data.name;
+                    state.filters.industry = ind;
+                    state.selectedIndustry = ind;
+                    state.selectedFirm = d.data; 
+                    
+                    // Update Dropdown UI
+                    document.getElementById('industry-select').value = ind;
+                    
+                    // Trigger everything
+                    applyFilters(); 
+                    updateBottomBar(); 
+                })
+                .on("mouseover", (e, d) => {
+                    const t = TRANSLATIONS[state.lang];
+                    const mvVal = d.data.marketValue > 1e8 ? (d.data.marketValue/1e8).toFixed(2) + t.unitYi : (d.data.marketValue/1e4).toFixed(0) + t.unitWan;
+                    showTooltip(`
+                        <div class="font-bold border-b border-gray-600 pb-1 mb-1">${d.data.name}</div>
+                        <div>${t.tooltipInd}: <span style="color:${INDUSTRY_COLORS(d.parent.data.name)}">${d.parent.data.name}</span></div>
+                        <div>${t.tooltipMV}: <span class="text-yellow-400 font-mono">${mvVal}</span></div>
+                        <div>${t.tooltipAR}: <span class="${d.data.eventWindowAvgAr>=0?'text-green-400':'text-red-400'} font-bold">${d3.format("+.2%")(d.data.eventWindowAvgAr)}</span></div>
+                        <div class="mt-1 text-xs text-gray-400 italic">${t.treemapHint}</div>
+                    `, e);
+                })
+                .on("mouseout", hideTooltip);
+
+            // *** 2. ADD LABELS TO BLOCKS ***
+            const labelGroup = cell.append("g")
+                .style("display", d => (d.x1 - d.x0) > 40 && (d.y1 - d.y0) > 30 ? "block" : "none") // Only show if block is big enough
+                .attr("pointer-events", "none");
+
+            // Name Label
+            labelGroup.append("text")
+                .attr("x", 4)
+                .attr("y", 14)
+                .text(d => d.data.name)
+                .attr("font-size", "11px")
+                .attr("font-weight", "bold")
+                .attr("fill", "white")
+                .style("text-shadow", "0 1px 2px rgba(0,0,0,0.5)");
+
+            // Code Label
+            labelGroup.append("text")
+                .attr("x", 4)
+                .attr("y", 26)
+                .text(d => d.data.code.substring(0, 6)) // Show 6 digit code
+                .attr("font-size", "9px")
+                .attr("fill", "rgba(255,255,255,0.9)")
+                .style("text-shadow", "0 1px 2px rgba(0,0,0,0.5)");
+        }
+
+        function drawBarChart() {
+            const target = document.getElementById('bar-chart-viz');
+            target.innerHTML = '';
+            
+            // Show filtered industry stocks OR Top 20 overall
+            let data = state.selectedIndustry 
+                ? state.filteredStocks.filter(d => d.industry === state.selectedIndustry)
+                : [...state.filteredStocks].sort((a,b) => b.marketValue - a.marketValue).slice(0, 20);
+
+            if(!data.length) return;
+
+            const width = target.clientWidth;
+            const height = 300;
+            const margin = {top: 10, right: 10, bottom: 60, left: 50};
+
+            const svg = d3.select(target).append("svg").attr("width", width).attr("height", height)
+                .append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+            const x = d3.scaleBand().range([0, width - margin.left - margin.right]).domain(data.map(d => d.name)).padding(0.3);
+            const maxVal = d3.max(data, d => Math.abs(d.eventWindowAvgAr)) || 0.01;
+            const y = d3.scaleLinear().domain([-maxVal, maxVal]).range([height - margin.top - margin.bottom, 0]);
+
+            svg.append("g").attr("transform", `translate(0,${y(0)})`).call(d3.axisBottom(x)).selectAll("text")
+                .attr("transform", "translate(-10,10)rotate(-45)").style("text-anchor", "end");
+            svg.append("g").call(d3.axisLeft(y).ticks(5).tickFormat(d3.format(".1%")));
+
+            svg.selectAll("rect").data(data).join("rect")
+                .attr("x", d => x(d.name)).attr("width", x.bandwidth())
+                .attr("y", d => d.eventWindowAvgAr > 0 ? y(d.eventWindowAvgAr) : y(0))
+                .attr("height", d => Math.abs(y(d.eventWindowAvgAr) - y(0)))
+                .attr("fill", d => d.eventWindowAvgAr > 0 ? "#10b981" : "#ef4444")
+                .attr("class", d => `cursor-pointer hover:opacity-80 ${state.selectedFirm === d ? 'stroke-2 stroke-blue-800' : ''}`)
+                .on("click", (e, d) => { state.selectedFirm = d; updateVisualizations(); updateBottomBar(); });
+        }
+
+        function drawLineChart() {
+            const t = TRANSLATIONS[state.lang];
+            const target = document.getElementById('line-chart-viz');
+            target.innerHTML = '';
+
+            if (!state.selectedFirm) {
+                target.innerHTML = "<div class='text-center text-gray-400 mt-20'>Select a stock to view details</div>";
+                return;
+            }
+
+            const firm = state.selectedFirm;
+            const width = target.clientWidth;
+            const height = 350;
+            const margin = {top: 20, right: 20, bottom: 30, left: 50};
+            
+            const svg = d3.select(target).append("svg").attr("width", width).attr("height", height)
+                .append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+            // Check if firm has buyback data for Relative View
+            const isRelative = firm.hasBuyback;
+            const eventLabel = isRelative ? t.buyback : t.policy;
+            
+            // Update Title Context
+            const eventDateStr = d3.timeFormat("%Y-%m-%d")(firm.eventDate);
+            document.getElementById('line-chart-title').innerHTML = `${firm.name} <span class="text-xs text-slate-400 font-normal">(${firm.code})</span>`;
+            
+            let displayData = [];
+            let xScale;
+
+            if(isRelative) {
+                // Case A: Buyback Event -> Relative Window [-20, +20] Days
+                const idx = firm.timeseries.findIndex(d => d.date.getTime() >= firm.eventDate.getTime());
+                
+                if(idx === -1) {
+                    target.innerHTML = "<div class='text-center text-gray-400 mt-20'>No history available for buyback date</div>";
+                    return;
+                }
+
+                const start = Math.max(0, idx - 20);
+                const end = Math.min(firm.timeseries.length - 1, idx + 20);
+                const baseCar = firm.timeseries[start].car; // Rebase to 0 at start of window
+                
+                for(let i=start; i<=end; i++) {
+                    displayData.push({ day: i-idx, val: firm.timeseries[i].car - baseCar });
+                }
+                
+                xScale = d3.scaleLinear().domain([-20, 20]).range([0, width - margin.left - margin.right]);
+                
+                // Shades
+                const chartH = height - margin.top - margin.bottom;
+                svg.append("rect").attr("x", xScale(-10)).attr("width", xScale(10)-xScale(-10)).attr("height", chartH).attr("class", "window-shade-10");
+                svg.append("rect").attr("x", xScale(-5)).attr("width", xScale(5)-xScale(-5)).attr("height", chartH).attr("class", "window-shade-5");
+                
+                svg.append("g").attr("transform", `translate(0,${chartH})`)
+                   .call(d3.axisBottom(xScale).ticks(5).tickFormat(d => `Day ${d}`));
+
+            } else {
+                // Case B: No Buyback -> Absolute Timeline (Policy)
+                displayData = firm.timeseries.map(d => ({ date: d.date, val: d.car }));
+                xScale = d3.scaleTime().domain(d3.extent(displayData, d => d.date)).range([0, width - margin.left - margin.right]);
+                
+                const pTime = POLICY_DATE.getTime();
+                const dayMs = 86400000;
+                const chartH = height - margin.top - margin.bottom;
+                
+                // Policy Shades
+                svg.append("rect").attr("x", xScale(new Date(pTime - 10*dayMs))).attr("width", xScale(new Date(pTime + 10*dayMs)) - xScale(new Date(pTime - 10*dayMs))).attr("y", 0).attr("height", chartH).attr("class", "window-shade-10");
+                svg.append("rect").attr("x", xScale(new Date(pTime - 5*dayMs))).attr("width", xScale(new Date(pTime + 5*dayMs)) - xScale(new Date(pTime - 5*dayMs))).attr("y", 0).attr("height", chartH).attr("class", "window-shade-5");
+
+                svg.append("g").attr("transform", `translate(0,${chartH})`).call(d3.axisBottom(xScale).ticks(5));
+            }
+
+            const yMax = d3.max(displayData, d => Math.abs(d.val)) || 0.05;
+            const yScale = d3.scaleLinear().domain([-yMax*1.2, yMax*1.2]).range([height - margin.top - margin.bottom, 0]);
+
+            svg.append("g").call(d3.axisLeft(yScale).ticks(5).tickFormat(d3.format(".1%")));
+
+            const line = d3.line()
+                .x(d => xScale(isRelative ? d.day : d.date))
+                .y(d => yScale(d.val));
+
+            svg.append("path").datum(displayData).attr("fill", "none").attr("stroke", "#2563eb").attr("stroke-width", 2.5).attr("d", line);
+            
+            // Vertical Event Marker
+            const markerX = isRelative ? xScale(0) : xScale(firm.eventDate);
+            if (markerX >= 0 && markerX <= (width - margin.left - margin.right)) {
+                svg.append("line").attr("x1", markerX).attr("x2", markerX).attr("y1", 0).attr("y2", height - margin.top - margin.bottom)
+                   .attr("stroke", "#f59e0b").attr("stroke-dasharray", "4").attr("stroke-width", 2);
+                
+                svg.append("text").attr("x", markerX + 5).attr("y", 15)
+                   .text(eventLabel).attr("fill", "#f59e0b").style("font-size", "10px").style("font-weight", "bold");
+            }
+        }
+
+        // --- 4. UI LOGIC ---
+        function initUI() {
+            // Populate Industry Dropdown
+            const industries = Array.from(new Set(state.allStocks.map(d => d.industry))).sort();
+            const sel = document.getElementById('industry-select');
+            sel.innerHTML = '<option value="all">All Industries</option>';
+            industries.forEach(i => sel.add(new Option(i, i)));
+            
+            sel.addEventListener('change', (e) => {
+                state.filters.industry = e.target.value;
+                applyFilters();
+            });
+
+            // Populate Benchmarks
+            const bSel = document.getElementById('benchmark-select');
+            BENCHMARKS_KEYS.forEach(k => bSel.add(new Option(k.replace('abnormal_ret_', ''), k)));
+            bSel.addEventListener('change', (e) => {
+                state.activeBenchmark = e.target.value;
+                recalculateAggregates();
+                updateVisualizations();
+            });
+        }
+
+        function applyFilters() {
+            const ind = state.filters.industry;
+            state.filteredStocks = ind === 'all' 
+                ? state.allStocks 
+                : state.allStocks.filter(d => d.industry === ind);
+            
+            // Auto-select industry if filtered via dropdown
+            if (ind !== 'all') state.selectedIndustry = ind;
+            else if (state.selectedIndustry && !state.filteredStocks.some(d => d.industry === state.selectedIndustry)) {
+                state.selectedIndustry = null;
+            }
+            
+            updateVisualizations();
+        }
+
+        function updateBottomBar() {
+            const bar = document.getElementById('stock-info-bar');
+            if(!state.selectedFirm) { bar.classList.remove('visible'); return; }
+            
+            const f = state.selectedFirm;
+            const t = TRANSLATIONS[state.lang];
+            
+            document.getElementById('info-name').textContent = f.name;
+            document.getElementById('info-code').textContent = f.code;
+            document.getElementById('info-ind').textContent = f.industry;
+            document.getElementById('info-loc').textContent = f.province + (f.city ? ' · ' + f.city : '');
+            
+            const mvVal = f.marketValue > 1e8 ? (f.marketValue/1e8).toFixed(2) + t.unitYi : (f.marketValue/1e4).toFixed(0) + t.unitWan;
+            document.getElementById('info-mv').textContent = mvVal;
+            document.getElementById('info-date').textContent = f.snapshot_date || 'N/A';
+            
+            const tag = document.getElementById('info-event-tag');
+            if(f.hasBuyback) {
+                tag.textContent = t.buyback + ": " + d3.timeFormat("%Y-%m-%d")(f.eventDate);
+                tag.classList.remove('hidden');
+            } else {
+                tag.classList.add('hidden');
+            }
+            
+            const webLink = document.getElementById('info-web');
+            if (f.website) {
+                let url = f.website.startsWith('http') ? f.website : 'http://' + f.website;
+                webLink.href = url;
+                webLink.style.display = 'flex';
+            } else {
+                webLink.style.display = 'none';
+            }
+            
+            bar.classList.add('visible');
+        }
+
+        function toggleLanguage() {
+            state.lang = state.lang === 'en' ? 'zh' : 'en';
+            updateInterfaceLanguage();
+        }
+
+        function updateInterfaceLanguage() {
+            const t = TRANSLATIONS[state.lang];
+            document.getElementById('lang-en').className = state.lang === 'en' ? 'text-blue-600 font-bold' : '';
+            document.getElementById('lang-zh').className = state.lang === 'zh' ? 'text-blue-600 font-bold' : '';
+            
+            const textMap = {
+                'page-title': 'pageTitle', 'page-subtitle': 'pageSubtitle',
+                'lbl-benchmark': 'lblBenchmark', 'lbl-province': 'lblProvince',
+                'lbl-industry': 'lblIndustry', 'lbl-show-all': 'lblShowAll',
+                'lbl-reset': 'lblReset', 'treemap-title': 'treemapTitle',
+                'treemap-subtitle': 'treemapSubtitle', 'treemap-hint': 'treemapHint',
+                'lbl-info-ind': 'lblInfoInd', 'lbl-info-loc': 'lblInfoLoc',
+                'lbl-info-mv': 'lblInfoMV', 'lbl-info-date': 'lblInfoDate',
+                'lbl-info-emp': 'lblInfoEmp', 'lbl-info-web': 'lblInfoWeb'
+            };
+            for (const [id, key] of Object.entries(textMap)) {
+                const el = document.getElementById(id);
+                if(el) el.innerHTML = t[key];
+            }
+            updateVisualizations();
+            updateBottomBar();
+        }
+
+        function resetFilters() {
+            document.getElementById('industry-select').value = 'all';
+            state.filters.industry = 'all';
+            state.selectedIndustry = null;
+            state.selectedFirm = null;
+            applyFilters();
+            updateBottomBar();
+        }
+
+        document.addEventListener("DOMContentLoaded", loadData);
+        window.addEventListener('resize', () => { if(state.allStocks.length) updateVisualizations(); });
+
+    </script>
+</body>
+</html>
